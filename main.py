@@ -1,15 +1,13 @@
 """
 Endo Health Blog Header Image Generator
 AI Solutions Engineer Challenge - Built for Endo Health GmbH
-Using Hugging Face Inference API for AI Image Generation
+Using Together AI - FAST image generation
 """
 
 import os
 import json
 import base64
 import urllib.request
-import urllib.parse
-from datetime import date
 from flask import Flask, request, jsonify
 from pathlib import Path
 
@@ -26,31 +24,25 @@ BRAND = {
     'text': '#4A4A4A'
 }
 
-# Hugging Face Model - Stable Diffusion XL (high quality, free)
-HF_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
-HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
+# Together AI endpoint
+TOGETHER_API_URL = "https://api.together.xyz/v1/images/generations"
 
-# Base style prompt for Endo Health brand
-BASE_STYLE = """minimalist blog header, burgundy and soft pink colors, 
-abstract wellness illustration, warm hopeful mood, clean modern design, 
-no text, no faces, no medical equipment, professional healthcare aesthetic,
-watercolor style, gentle flowing shapes"""
+# Base style prompt
+BASE_STYLE = "minimalist blog header, burgundy and soft pink colors, abstract wellness illustration, warm hopeful mood, clean modern design, no text, no faces, watercolor style, professional healthcare aesthetic"
 
-# Visual concepts for different topics
 CONCEPTS = {
-    'cycle': 'moon phases, circular flowing patterns, gentle waves',
-    'menstrual': 'circular rhythmic patterns, soft rose gradients',
-    'exercise': 'gentle yoga poses silhouette, flowing movement lines',
-    'nutrition': 'botanical leaves, organic food shapes, natural elements',
-    'stress': 'calming gradients, peaceful abstract shapes, soothing tones',
-    'partner': 'two abstract shapes together, intertwined forms, connection',
-    'support': 'embracing curves, protective shapes, warmth',
-    'doctor': 'professional abstract, caring geometric shapes',
-    'self-care': 'spa-like peaceful scene, nurturing cocoon shapes',
-    'community': 'connected dots, network pattern, togetherness',
-    'pain': 'soothing waves, gentle relief patterns, soft gradients',
-    'healing': 'growth patterns, blooming abstract, renewal shapes',
-    'endometriosis': 'pink ribbon abstract, supportive flowing shapes'
+    'cycle': 'moon phases, circular flowing patterns',
+    'menstrual': 'circular rhythmic patterns, rose gradients',
+    'exercise': 'gentle yoga silhouette, flowing movement',
+    'nutrition': 'botanical leaves, organic shapes',
+    'stress': 'calming gradients, peaceful shapes',
+    'partner': 'two abstract shapes together',
+    'support': 'embracing curves, warmth',
+    'doctor': 'professional abstract shapes',
+    'self-care': 'spa peaceful scene, nurturing',
+    'community': 'connected dots, togetherness',
+    'pain': 'soothing waves, gentle relief',
+    'healing': 'growth patterns, blooming abstract',
 }
 
 SAMPLE_TITLES = [
@@ -60,77 +52,55 @@ SAMPLE_TITLES = [
 ]
 
 def get_concept(title):
-    """Extract visual concept based on title keywords."""
     title_lower = title.lower()
     matched = [c for k, c in CONCEPTS.items() if k in title_lower]
-    return ', '.join(matched[:2]) if matched else 'gentle abstract flowing shapes, peaceful wellness imagery'
+    return ', '.join(matched[:2]) if matched else 'gentle abstract flowing shapes, peaceful wellness'
 
 def create_prompt(title):
-    """Create full prompt for image generation."""
     concept = get_concept(title)
     return f"{BASE_STYLE}, {concept}"
 
-def generate_image_hf(title):
-    """Generate image using Hugging Face Inference API."""
-    api_key = os.environ.get('HF_API_KEY')
+def generate_image(title):
+    """Generate image using Together AI - FAST!"""
+    api_key = os.environ.get('TOGETHER_API_KEY')
     if not api_key:
-        return None, "HF_API_KEY not set"
+        return None, "TOGETHER_API_KEY not set", None
     
     try:
         prompt = create_prompt(title)
         
-        # Prepare request
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
         
         data = json.dumps({
-            "inputs": prompt,
-            "parameters": {
-                "width": 1024,
-                "height": 576,  # 16:9 aspect ratio
-                "num_inference_steps": 25,
-                "guidance_scale": 7.5
-            }
+            "model": "black-forest-labs/FLUX.1-schnell-Free",
+            "prompt": prompt,
+            "width": 1024,
+            "height": 576,
+            "steps": 4,
+            "n": 1,
+            "response_format": "b64_json"
         }).encode('utf-8')
         
-        req = urllib.request.Request(HF_API_URL, data=data, headers=headers)
+        req = urllib.request.Request(TOGETHER_API_URL, data=data, headers=headers)
         
-        with urllib.request.urlopen(req, timeout=120) as response:
-            image_data = response.read()
+        with urllib.request.urlopen(req, timeout=60) as response:
+            result = json.loads(response.read().decode('utf-8'))
             
-            # Check if it's an error response (JSON)
-            try:
-                error_response = json.loads(image_data)
-                if 'error' in error_response:
-                    # Model is loading, wait
-                    if 'loading' in str(error_response.get('error', '')).lower():
-                        return None, "Model loading, please try again in 30 seconds"
-                    return None, f"API Error: {error_response.get('error', 'Unknown')}"
-            except:
-                pass  # Not JSON, it's image data - good!
+            if 'data' in result and len(result['data']) > 0:
+                image_b64 = result['data'][0].get('b64_json')
+                if image_b64:
+                    return image_b64, None, "together"
             
-            return base64.b64encode(image_data).decode('utf-8'), None
+            return None, "No image in response", None
             
     except urllib.error.HTTPError as e:
         error_body = e.read().decode('utf-8', errors='ignore')
-        try:
-            error_json = json.loads(error_body)
-            if 'estimated_time' in error_json:
-                return None, f"Model loading (~{int(error_json['estimated_time'])}s). Try again soon!"
-            return None, f"API Error: {error_json.get('error', str(e))}"
-        except:
-            return None, f"HTTP Error {e.code}: {error_body[:100]}"
+        return None, f"API Error: {error_body[:200]}", None
     except Exception as e:
-        return None, f"Error: {str(e)}"
-
-def generate_image(title):
-    """Generate image with Hugging Face."""
-    image, error = generate_image_hf(title)
-    if image:
-        return image, None, "huggingface"
-    return None, error, None
+        return None, f"Error: {str(e)}", None
 
 @app.route('/')
 def index():
@@ -251,23 +221,21 @@ def index():
         </div>
         
         <div class="card">
-            <div class="badge"><span class="dot"></span> Stable Diffusion AI • Free Tier</div>
+            <div class="badge"><span class="dot"></span> FLUX AI • Fast Generation</div>
             <div class="label">📝 Blog Titles</div>
             <textarea id="titles">{chr(10).join(SAMPLE_TITLES)}</textarea>
-            <p class="hint">One title per line. Each generates a unique AI header image (may take 15-30 seconds each).</p>
+            <p class="hint">One title per line. Each generates a unique AI header image (~5 seconds each).</p>
             <button class="btn" onclick="generate()" id="btn">▶ Generate Headers</button>
         </div>
         
         <div class="progress" id="progress"><div class="progress-bar" id="bar"></div></div>
-        <div class="loading" id="loading"><div class="spinner"></div><p class="loading-text" id="status">Generating with AI...</p></div>
+        <div class="loading" id="loading"><div class="spinner"></div><p class="loading-text" id="status">Generating AI images...</p></div>
         <div class="results" id="results"></div>
         
         <div class="footer">Built for <a href="https://endometriose.app">Endo Health GmbH</a> • AI Solutions Engineer Challenge</div>
     </div>
     
     <script>
-        const sid = 'sess_' + Date.now();
-        
         async function generate() {{
             const text = document.getElementById('titles').value.trim();
             if (!text) return alert('Enter at least one title');
@@ -291,7 +259,7 @@ def index():
                     const res = await fetch('/generate', {{
                         method: 'POST',
                         headers: {{'Content-Type': 'application/json'}},
-                        body: JSON.stringify({{title: titles[i].trim(), session_id: sid}})
+                        body: JSON.stringify({{title: titles[i].trim()}})
                     }});
                     const data = await res.json();
                     results.push({{title: titles[i].trim(), ...data}});
@@ -321,7 +289,7 @@ def index():
                         <div class="result-info">
                             <div>
                                 <div class="result-title">${{r.title}}</div>
-                                <span class="result-source">🤗 AI Generated</span>
+                                <span class="result-source">✨ FLUX AI Generated</span>
                             </div>
                             <button class="btn-sm" onclick="download('${{r.image}}','header_${{i+1}}.png')">Download</button>
                         </div>`;
@@ -354,7 +322,6 @@ def index():
 def gen():
     data = request.get_json()
     title = data.get('title', '').strip()
-    session_id = data.get('session_id', 'unknown')
     
     if not title:
         return jsonify({'success': False, 'error': 'No title'})
@@ -363,18 +330,11 @@ def gen():
     
     if image:
         return jsonify({'success': True, 'image': image, 'title': title, 'source': source})
-    return jsonify({'success': False, 'error': error})
+    return jsonify({'success': False, 'error': error or 'Generation failed'})
 
 @app.route('/health')
 def health():
     return 'OK', 200
-
-@app.route('/api/status')
-def status():
-    return jsonify({
-        'status': 'ok',
-        'hf_key': bool(os.environ.get('HF_API_KEY'))
-    })
 
 Path('static/generated').mkdir(parents=True, exist_ok=True)
 
