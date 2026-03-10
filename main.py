@@ -1,18 +1,25 @@
 """
 Endo Health Blog Header Image Generator
 AI Solutions Engineer Challenge - Built for Endo Health GmbH
-Using Together AI - FLUX Schnell (FREE)
+Using DALL-E 3 with usage limits and password protection
 """
 
 import os
 import json
 import base64
+from datetime import date
 from flask import Flask, request, jsonify
 from pathlib import Path
 import requests
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SESSION_SECRET', 'endo-health-secret-key')
+
+# ============ PROTECTION SETTINGS ============
+DAILY_LIMIT = 20  # Max images per day (prevents overuse)
+SESSION_LIMIT = 10  # Max images per session
+ACCESS_PASSWORD = os.environ.get('APP_PASSWORD', 'endo2024')  # Password to access
+# =============================================
 
 # Brand Colors
 BRAND = {
@@ -24,11 +31,10 @@ BRAND = {
     'text': '#4A4A4A'
 }
 
-# Together AI endpoint
-TOGETHER_API_URL = "https://api.together.xyz/v1/images/generations"
+USAGE_FILE = 'usage_data.json'
 
 # Base style prompt
-BASE_STYLE = "minimalist blog header, burgundy and soft pink colors, abstract wellness illustration, warm hopeful mood, clean modern design, no text, no faces, watercolor style, professional healthcare aesthetic"
+BASE_STYLE = "minimalist blog header image, burgundy (#8B2346) and soft pink colors, abstract wellness illustration, warm hopeful mood, clean modern design, NO text, NO words, NO letters, NO faces, watercolor style, professional healthcare aesthetic"
 
 CONCEPTS = {
     'cycle': 'moon phases, circular flowing patterns',
@@ -51,6 +57,37 @@ SAMPLE_TITLES = [
     "Nutrition Tips: Anti-Inflammatory Foods That Help"
 ]
 
+def load_usage():
+    if os.path.exists(USAGE_FILE):
+        try:
+            with open(USAGE_FILE, 'r') as f:
+                data = json.load(f)
+                if data.get('date') != str(date.today()):
+                    return {'date': str(date.today()), 'count': 0, 'sessions': {}}
+                return data
+        except:
+            pass
+    return {'date': str(date.today()), 'count': 0, 'sessions': {}}
+
+def save_usage(data):
+    try:
+        with open(USAGE_FILE, 'w') as f:
+            json.dump(data, f)
+    except:
+        pass
+
+def get_daily_count():
+    return load_usage().get('count', 0)
+
+def get_session_count(session_id):
+    return load_usage().get('sessions', {}).get(session_id, 0)
+
+def increment_usage(session_id):
+    usage = load_usage()
+    usage['count'] = usage.get('count', 0) + 1
+    usage.setdefault('sessions', {})[session_id] = usage['sessions'].get(session_id, 0) + 1
+    save_usage(usage)
+
 def get_concept(title):
     title_lower = title.lower()
     matched = [c for k, c in CONCEPTS.items() if k in title_lower]
@@ -61,32 +98,30 @@ def create_prompt(title):
     return f"{BASE_STYLE}, {concept}"
 
 def generate_image(title):
-    """Generate image using Together AI"""
-    api_key = os.environ.get('TOGETHER_API_KEY')
+    """Generate image using DALL-E 3"""
+    api_key = os.environ.get('OPENAI_API_KEY')
     if not api_key:
-        return None, "TOGETHER_API_KEY not set", None
+        return None, "OPENAI_API_KEY not set", None
     
     try:
         prompt = create_prompt(title)
         
         headers = {
             "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": "EndoHealth/1.0"
+            "Content-Type": "application/json"
         }
         
         payload = {
-            "model": "black-forest-labs/FLUX.1-schnell-Free",
+            "model": "dall-e-3",
             "prompt": prompt,
-            "width": 1024,
-            "height": 576,
-            "steps": 4,
             "n": 1,
+            "size": "1792x1024",
+            "quality": "standard",
             "response_format": "b64_json"
         }
         
         response = requests.post(
-            TOGETHER_API_URL,
+            "https://api.openai.com/v1/images/generations",
             headers=headers,
             json=payload,
             timeout=60
@@ -97,10 +132,11 @@ def generate_image(title):
             if 'data' in result and len(result['data']) > 0:
                 image_b64 = result['data'][0].get('b64_json')
                 if image_b64:
-                    return image_b64, None, "together"
+                    return image_b64, None, "dalle"
             return None, "No image in response", None
         else:
-            return None, f"API Error: {response.status_code} - {response.text[:200]}", None
+            error_msg = response.json().get('error', {}).get('message', response.text[:200])
+            return None, f"API Error: {error_msg}", None
             
     except requests.exceptions.Timeout:
         return None, "Request timeout - try again", None
@@ -109,6 +145,7 @@ def generate_image(title):
 
 @app.route('/')
 def index():
+    daily_remaining = DAILY_LIMIT - get_daily_count()
     return f'''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -155,6 +192,15 @@ def index():
         }}
         .dot {{ width: 8px; height: 8px; background: #22C55E; border-radius: 50%; }}
         .label {{ font-size: 13px; font-weight: 600; color: {BRAND['primary']}; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }}
+        input[type="password"] {{
+            width: 100%; padding: 14px;
+            border: 2px solid {BRAND['secondary']};
+            border-radius: 12px;
+            font-family: inherit; font-size: 14px;
+            color: {BRAND['text']};
+            margin-bottom: 16px;
+        }}
+        input:focus {{ outline: none; border-color: {BRAND['primary']}; }}
         textarea {{
             width: 100%; padding: 14px;
             border: 2px solid {BRAND['secondary']};
@@ -210,6 +256,7 @@ def index():
         .progress {{ height: 4px; background: {BRAND['secondary']}; border-radius: 2px; margin-bottom: 16px; display: none; }}
         .progress.active {{ display: block; }}
         .progress-bar {{ height: 100%; background: {BRAND['primary']}; width: 0%; transition: width 0.3s; }}
+        .quota {{ font-size: 11px; color: {BRAND['primary']}; margin-top: 12px; padding: 8px 12px; background: {BRAND['secondary']}; border-radius: 8px; }}
         .footer {{ text-align: center; padding: 30px 0; opacity: 0.5; font-size: 12px; }}
         .footer a {{ color: {BRAND['primary']}; text-decoration: none; }}
     </style>
@@ -226,22 +273,32 @@ def index():
         </div>
         
         <div class="card">
-            <div class="badge"><span class="dot"></span> FLUX AI • Fast Generation</div>
+            <div class="badge"><span class="dot"></span> DALL-E 3 • Premium Quality</div>
+            
+            <div class="label">🔑 Access Password</div>
+            <input type="password" id="password" placeholder="Enter password to generate">
+            
             <div class="label">📝 Blog Titles</div>
             <textarea id="titles">{chr(10).join(SAMPLE_TITLES)}</textarea>
-            <p class="hint">One title per line. Each generates a unique AI header image (~5 seconds each).</p>
+            <p class="hint">One title per line. Each generates a unique AI header image (~10-15 seconds each).</p>
             <button class="btn" onclick="generate()" id="btn">▶ Generate Headers</button>
+            <div class="quota">📊 Daily quota remaining: {daily_remaining}/{DAILY_LIMIT} images</div>
         </div>
         
         <div class="progress" id="progress"><div class="progress-bar" id="bar"></div></div>
-        <div class="loading" id="loading"><div class="spinner"></div><p class="loading-text" id="status">Generating AI images...</p></div>
+        <div class="loading" id="loading"><div class="spinner"></div><p class="loading-text" id="status">Generating with DALL-E 3...</p></div>
         <div class="results" id="results"></div>
         
         <div class="footer">Built for <a href="https://endometriose.app">Endo Health GmbH</a> • AI Solutions Engineer Challenge</div>
     </div>
     
     <script>
+        const sid = 'sess_' + Date.now();
+        
         async function generate() {{
+            const password = document.getElementById('password').value;
+            if (!password) return alert('Please enter the access password');
+            
             const text = document.getElementById('titles').value.trim();
             if (!text) return alert('Enter at least one title');
             
@@ -264,10 +321,23 @@ def index():
                     const res = await fetch('/generate', {{
                         method: 'POST',
                         headers: {{'Content-Type': 'application/json'}},
-                        body: JSON.stringify({{title: titles[i].trim()}})
+                        body: JSON.stringify({{
+                            title: titles[i].trim(),
+                            password: password,
+                            session_id: sid
+                        }})
                     }});
                     const data = await res.json();
                     results.push({{title: titles[i].trim(), ...data}});
+                    
+                    if (data.error && data.error.includes('password')) {{
+                        alert('Invalid password!');
+                        break;
+                    }}
+                    if (data.error && data.error.includes('limit')) {{
+                        alert(data.error);
+                        break;
+                    }}
                 }} catch (e) {{
                     results.push({{title: titles[i].trim(), success: false, error: 'Network error'}});
                 }}
@@ -294,7 +364,7 @@ def index():
                         <div class="result-info">
                             <div>
                                 <div class="result-title">${{r.title}}</div>
-                                <span class="result-source">✨ FLUX AI Generated</span>
+                                <span class="result-source">✨ DALL-E 3 Generated</span>
                             </div>
                             <button class="btn-sm" onclick="download('${{r.image}}','header_${{i+1}}.png')">Download</button>
                         </div>`;
@@ -327,19 +397,42 @@ def index():
 def gen():
     data = request.get_json()
     title = data.get('title', '').strip()
+    password = data.get('password', '')
+    session_id = data.get('session_id', 'unknown')
+    
+    # Check password
+    if password != ACCESS_PASSWORD:
+        return jsonify({'success': False, 'error': 'Invalid password'})
+    
+    # Check daily limit
+    if get_daily_count() >= DAILY_LIMIT:
+        return jsonify({'success': False, 'error': f'Daily limit reached ({DAILY_LIMIT} images). Try again tomorrow.'})
+    
+    # Check session limit
+    if get_session_count(session_id) >= SESSION_LIMIT:
+        return jsonify({'success': False, 'error': f'Session limit reached ({SESSION_LIMIT} images).'})
     
     if not title:
-        return jsonify({'success': False, 'error': 'No title'})
+        return jsonify({'success': False, 'error': 'No title provided'})
     
     image, error, source = generate_image(title)
     
     if image:
+        increment_usage(session_id)
         return jsonify({'success': True, 'image': image, 'title': title, 'source': source})
     return jsonify({'success': False, 'error': error or 'Generation failed'})
 
 @app.route('/health')
 def health():
     return 'OK', 200
+
+@app.route('/api/status')
+def status():
+    return jsonify({
+        'daily_used': get_daily_count(),
+        'daily_limit': DAILY_LIMIT,
+        'api_key_set': bool(os.environ.get('OPENAI_API_KEY'))
+    })
 
 Path('static/generated').mkdir(parents=True, exist_ok=True)
 
