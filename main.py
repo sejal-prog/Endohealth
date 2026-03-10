@@ -1,15 +1,15 @@
 """
 Endo Health Blog Header Image Generator
 AI Solutions Engineer Challenge - Built for Endo Health GmbH
-Using Together AI - FAST image generation
+Using Together AI - FLUX Schnell (FREE)
 """
 
 import os
 import json
 import base64
-import urllib.request
 from flask import Flask, request, jsonify
 from pathlib import Path
+import requests
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SESSION_SECRET', 'endo-health-secret-key')
@@ -61,7 +61,7 @@ def create_prompt(title):
     return f"{BASE_STYLE}, {concept}"
 
 def generate_image(title):
-    """Generate image using Together AI - FAST!"""
+    """Generate image using Together AI"""
     api_key = os.environ.get('TOGETHER_API_KEY')
     if not api_key:
         return None, "TOGETHER_API_KEY not set", None
@@ -71,10 +71,11 @@ def generate_image(title):
         
         headers = {
             "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "User-Agent": "EndoHealth/1.0"
         }
         
-        data = json.dumps({
+        payload = {
             "model": "black-forest-labs/FLUX.1-schnell-Free",
             "prompt": prompt,
             "width": 1024,
@@ -82,23 +83,27 @@ def generate_image(title):
             "steps": 4,
             "n": 1,
             "response_format": "b64_json"
-        }).encode('utf-8')
+        }
         
-        req = urllib.request.Request(TOGETHER_API_URL, data=data, headers=headers)
+        response = requests.post(
+            TOGETHER_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=60
+        )
         
-        with urllib.request.urlopen(req, timeout=60) as response:
-            result = json.loads(response.read().decode('utf-8'))
-            
+        if response.status_code == 200:
+            result = response.json()
             if 'data' in result and len(result['data']) > 0:
                 image_b64 = result['data'][0].get('b64_json')
                 if image_b64:
                     return image_b64, None, "together"
-            
             return None, "No image in response", None
+        else:
+            return None, f"API Error: {response.status_code} - {response.text[:200]}", None
             
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode('utf-8', errors='ignore')
-        return None, f"API Error: {error_body[:200]}", None
+    except requests.exceptions.Timeout:
+        return None, "Request timeout - try again", None
     except Exception as e:
         return None, f"Error: {str(e)}", None
 
