@@ -1,21 +1,17 @@
 """
 Endo Health Blog Header Image Generator
 AI Solutions Engineer Challenge - Built for Endo Health GmbH
+Using Hugging Face Inference API for AI Image Generation
 """
 
 import os
 import json
 import base64
+import urllib.request
+import urllib.parse
 from datetime import date
 from flask import Flask, request, jsonify
 from pathlib import Path
-
-try:
-    from google import genai
-    from google.genai import types
-    GENAI_AVAILABLE = True
-except ImportError:
-    GENAI_AVAILABLE = False
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SESSION_SECRET', 'endo-health-secret-key')
@@ -30,30 +26,31 @@ BRAND = {
     'text': '#4A4A4A'
 }
 
-MAX_PER_SESSION = 10
-USAGE_FILE = 'usage_data.json'
+# Hugging Face Model - Stable Diffusion XL (high quality, free)
+HF_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
+HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
 
-# Prompts
-BASE_STYLE = """Create a modern minimalist blog header image:
-- Colors: burgundy (#8B2346), soft pink, rose, cream
-- Style: clean vector or watercolor illustration
-- Abstract, supportive healthcare aesthetic
-- NO faces, NO text/words, NO medical equipment
-- Warm hopeful mood"""
+# Base style prompt for Endo Health brand
+BASE_STYLE = """minimalist blog header, burgundy and soft pink colors, 
+abstract wellness illustration, warm hopeful mood, clean modern design, 
+no text, no faces, no medical equipment, professional healthcare aesthetic,
+watercolor style, gentle flowing shapes"""
 
+# Visual concepts for different topics
 CONCEPTS = {
-    'cycle': 'circular flowing patterns, moon phases, gentle waves',
-    'menstrual': 'circular patterns, rhythmic waves in rose tones',
-    'exercise': 'gentle movement lines, yoga curves',
-    'nutrition': 'organic leaf shapes, botanical abstracts',
-    'stress': 'transitioning patterns, soothing gradients',
-    'partner': 'intertwined abstract shapes, connected forms',
-    'support': 'embracing shapes, protective curves',
-    'doctor': 'professional caring abstracts',
-    'self-care': 'nurturing cocoon shapes, peaceful sanctuary',
-    'community': 'connected network patterns',
-    'pain': 'soothing wave patterns, gentle relief',
-    'healing': 'gentle recovery patterns, growth abstracts'
+    'cycle': 'moon phases, circular flowing patterns, gentle waves',
+    'menstrual': 'circular rhythmic patterns, soft rose gradients',
+    'exercise': 'gentle yoga poses silhouette, flowing movement lines',
+    'nutrition': 'botanical leaves, organic food shapes, natural elements',
+    'stress': 'calming gradients, peaceful abstract shapes, soothing tones',
+    'partner': 'two abstract shapes together, intertwined forms, connection',
+    'support': 'embracing curves, protective shapes, warmth',
+    'doctor': 'professional abstract, caring geometric shapes',
+    'self-care': 'spa-like peaceful scene, nurturing cocoon shapes',
+    'community': 'connected dots, network pattern, togetherness',
+    'pain': 'soothing waves, gentle relief patterns, soft gradients',
+    'healing': 'growth patterns, blooming abstract, renewal shapes',
+    'endometriosis': 'pink ribbon abstract, supportive flowing shapes'
 }
 
 SAMPLE_TITLES = [
@@ -62,81 +59,78 @@ SAMPLE_TITLES = [
     "Nutrition Tips: Anti-Inflammatory Foods That Help"
 ]
 
-def load_usage():
-    if os.path.exists(USAGE_FILE):
-        try:
-            with open(USAGE_FILE, 'r') as f:
-                data = json.load(f)
-                if data.get('date') != str(date.today()):
-                    return {'date': str(date.today()), 'count': 0, 'sessions': {}}
-                return data
-        except:
-            pass
-    return {'date': str(date.today()), 'count': 0, 'sessions': {}}
-
-def save_usage(data):
-    try:
-        with open(USAGE_FILE, 'w') as f:
-            json.dump(data, f)
-    except:
-        pass
-
-def get_session_count(session_id):
-    return load_usage().get('sessions', {}).get(session_id, 0)
-
-def increment_usage(session_id):
-    usage = load_usage()
-    usage['count'] = usage.get('count', 0) + 1
-    usage.setdefault('sessions', {})[session_id] = usage['sessions'].get(session_id, 0) + 1
-    save_usage(usage)
-
 def get_concept(title):
+    """Extract visual concept based on title keywords."""
     title_lower = title.lower()
     matched = [c for k, c in CONCEPTS.items() if k in title_lower]
-    return ' and '.join(matched[:2]) if matched else 'gentle abstract flowing shapes with burgundy and pink gradients'
+    return ', '.join(matched[:2]) if matched else 'gentle abstract flowing shapes, peaceful wellness imagery'
 
 def create_prompt(title):
+    """Create full prompt for image generation."""
     concept = get_concept(title)
-    return f"{BASE_STYLE}\n\nVisual concept: {concept}\nTopic (mood only, no text): {title}"
+    return f"{BASE_STYLE}, {concept}"
 
-def generate_image(title):
-    """Generate image using Gemini 2.5 Flash Image (Nano Banana)."""
-    if not GENAI_AVAILABLE:
-        return None, "google-genai package not installed"
-    
-    api_key = os.environ.get('GEMINI_API_KEY')
+def generate_image_hf(title):
+    """Generate image using Hugging Face Inference API."""
+    api_key = os.environ.get('HF_API_KEY')
     if not api_key:
-        return None, "GEMINI_API_KEY not set"
+        return None, "HF_API_KEY not set"
     
     try:
-        client = genai.Client(api_key=api_key)
         prompt = create_prompt(title)
         
-        # Use gemini-2.5-flash-image (confirmed working, production model)
-        response = client.models.generate_content(
-            model="gemini-2.5-flash-image",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_modalities=["IMAGE"],
-                image_config=types.ImageConfig(
-                    aspect_ratio="16:9"
-                )
-            ),
-        )
+        # Prepare request
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
         
-        # Extract image
-        if response.candidates and response.candidates[0].content.parts:
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, 'inline_data') and part.inline_data:
-                    data = part.inline_data.data
-                    if isinstance(data, bytes):
-                        return base64.b64encode(data).decode('utf-8'), None
-                    return data, None
+        data = json.dumps({
+            "inputs": prompt,
+            "parameters": {
+                "width": 1024,
+                "height": 576,  # 16:9 aspect ratio
+                "num_inference_steps": 25,
+                "guidance_scale": 7.5
+            }
+        }).encode('utf-8')
         
-        return None, "No image in response"
+        req = urllib.request.Request(HF_API_URL, data=data, headers=headers)
         
+        with urllib.request.urlopen(req, timeout=120) as response:
+            image_data = response.read()
+            
+            # Check if it's an error response (JSON)
+            try:
+                error_response = json.loads(image_data)
+                if 'error' in error_response:
+                    # Model is loading, wait
+                    if 'loading' in str(error_response.get('error', '')).lower():
+                        return None, "Model loading, please try again in 30 seconds"
+                    return None, f"API Error: {error_response.get('error', 'Unknown')}"
+            except:
+                pass  # Not JSON, it's image data - good!
+            
+            return base64.b64encode(image_data).decode('utf-8'), None
+            
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode('utf-8', errors='ignore')
+        try:
+            error_json = json.loads(error_body)
+            if 'estimated_time' in error_json:
+                return None, f"Model loading (~{int(error_json['estimated_time'])}s). Try again soon!"
+            return None, f"API Error: {error_json.get('error', str(e))}"
+        except:
+            return None, f"HTTP Error {e.code}: {error_body[:100]}"
     except Exception as e:
         return None, f"Error: {str(e)}"
+
+def generate_image(title):
+    """Generate image with Hugging Face."""
+    image, error = generate_image_hf(title)
+    if image:
+        return image, None, "huggingface"
+    return None, error, None
 
 @app.route('/')
 def index():
@@ -216,8 +210,9 @@ def index():
             margin-bottom: 20px;
         }}
         .result img {{ width: 100%; aspect-ratio: 16/9; object-fit: cover; background: {BRAND['secondary']}; }}
-        .result-info {{ padding: 14px 18px; border-top: 1px solid {BRAND['secondary']}; }}
-        .result-title {{ font-size: 13px; font-weight: 500; margin-bottom: 8px; }}
+        .result-info {{ padding: 14px 18px; border-top: 1px solid {BRAND['secondary']}; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }}
+        .result-title {{ font-size: 13px; font-weight: 500; }}
+        .result-source {{ font-size: 10px; padding: 3px 8px; border-radius: 10px; background: {BRAND['secondary']}; color: {BRAND['primary']}; }}
         .btn-sm {{
             padding: 6px 14px; font-size: 12px; border-radius: 6px;
             background: {BRAND['secondary']}; color: {BRAND['primary']};
@@ -256,15 +251,15 @@ def index():
         </div>
         
         <div class="card">
-            <div class="badge"><span class="dot"></span> Gemini AI • Free Tier</div>
+            <div class="badge"><span class="dot"></span> Stable Diffusion AI • Free Tier</div>
             <div class="label">📝 Blog Titles</div>
             <textarea id="titles">{chr(10).join(SAMPLE_TITLES)}</textarea>
-            <p class="hint">One title per line. Each generates a unique header image.</p>
+            <p class="hint">One title per line. Each generates a unique AI header image (may take 15-30 seconds each).</p>
             <button class="btn" onclick="generate()" id="btn">▶ Generate Headers</button>
         </div>
         
         <div class="progress" id="progress"><div class="progress-bar" id="bar"></div></div>
-        <div class="loading" id="loading"><div class="spinner"></div><p class="loading-text" id="status">Generating...</p></div>
+        <div class="loading" id="loading"><div class="spinner"></div><p class="loading-text" id="status">Generating with AI...</p></div>
         <div class="results" id="results"></div>
         
         <div class="footer">Built for <a href="https://endometriose.app">Endo Health GmbH</a> • AI Solutions Engineer Challenge</div>
@@ -272,7 +267,6 @@ def index():
     
     <script>
         const sid = 'sess_' + Date.now();
-        let count = 0;
         
         async function generate() {{
             const text = document.getElementById('titles').value.trim();
@@ -292,7 +286,7 @@ def index():
             const results = [];
             
             for (let i = 0; i < titles.length; i++) {{
-                status.textContent = 'Generating: ' + titles[i].substring(0, 30) + '...';
+                status.textContent = 'Generating (' + (i+1) + '/' + titles.length + '): ' + titles[i].substring(0, 25) + '...';
                 try {{
                     const res = await fetch('/generate', {{
                         method: 'POST',
@@ -301,7 +295,6 @@ def index():
                     }});
                     const data = await res.json();
                     results.push({{title: titles[i].trim(), ...data}});
-                    if (data.success) count++;
                 }} catch (e) {{
                     results.push({{title: titles[i].trim(), success: false, error: 'Network error'}});
                 }}
@@ -326,8 +319,11 @@ def index():
                     div.innerHTML = `
                         <img src="data:image/png;base64,${{r.image}}" alt="${{r.title}}">
                         <div class="result-info">
-                            <div class="result-title">${{r.title}}</div>
-                            <button class="btn-sm" onclick="download('${{r.image}}','header_${{i+1}}.png')">Download PNG</button>
+                            <div>
+                                <div class="result-title">${{r.title}}</div>
+                                <span class="result-source">🤗 AI Generated</span>
+                            </div>
+                            <button class="btn-sm" onclick="download('${{r.image}}','header_${{i+1}}.png')">Download</button>
                         </div>`;
                 }} else {{
                     div.innerHTML = `
@@ -363,14 +359,10 @@ def gen():
     if not title:
         return jsonify({'success': False, 'error': 'No title'})
     
-    if get_session_count(session_id) >= MAX_PER_SESSION:
-        return jsonify({'success': False, 'error': 'Session limit reached'})
-    
-    image, error = generate_image(title)
+    image, error, source = generate_image(title)
     
     if image:
-        increment_usage(session_id)
-        return jsonify({'success': True, 'image': image, 'title': title})
+        return jsonify({'success': True, 'image': image, 'title': title, 'source': source})
     return jsonify({'success': False, 'error': error})
 
 @app.route('/health')
@@ -381,8 +373,7 @@ def health():
 def status():
     return jsonify({
         'status': 'ok',
-        'genai': GENAI_AVAILABLE,
-        'api_key': bool(os.environ.get('GEMINI_API_KEY'))
+        'hf_key': bool(os.environ.get('HF_API_KEY'))
     })
 
 Path('static/generated').mkdir(parents=True, exist_ok=True)
