@@ -100,7 +100,7 @@ def create_prompt(title):
     return f"{BASE_STYLE}\n\nVisual concept: {concept}\nTopic (mood only, no text): {title}"
 
 def generate_image(title):
-    """Generate image using Gemini 2.0 Flash Experimental."""
+    """Generate image using Gemini 2.5 Flash Image (Nano Banana)."""
     if not GENAI_AVAILABLE:
         return None, "google-genai package not installed"
     
@@ -112,12 +112,15 @@ def generate_image(title):
         client = genai.Client(api_key=api_key)
         prompt = create_prompt(title)
         
-        # Try gemini-2.0-flash-exp (confirmed working for image generation)
+        # Use gemini-2.5-flash-image (confirmed working, production model)
         response = client.models.generate_content(
-            model="gemini-2.0-flash-exp",
+            model="gemini-2.5-flash-image",
             contents=prompt,
             config=types.GenerateContentConfig(
-                response_modalities=["Text", "Image"]
+                response_modalities=["IMAGE"],
+                image_config=types.ImageConfig(
+                    aspect_ratio="16:9"
+                )
             ),
         )
         
